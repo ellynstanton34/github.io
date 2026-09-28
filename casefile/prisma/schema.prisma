@@ -1,0 +1,310 @@
+// Casefile data model.
+// Core values live here, not just in the UI:
+// - Every case has at least one Victim, and the profile records its basis.
+// - Every Claim has a status (Confirmed / Alleged / Rumor) and links to Sources.
+// - People carry a legal status so the check can catch uncharged people named as guilty.
+// - FamilyNotes marked DO_NOT_INCLUDE are checked against every script.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- Auth ----------
+
+model User {
+  id        String       @id @default(cuid())
+  email     String       @unique
+  name      String?
+  createdAt DateTime     @default(now())
+  cases     Case[]
+  tokens    LoginToken[]
+}
+
+model LoginToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// ---------- Case ----------
+
+enum CaseStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+model Case {
+  id        String     @id @default(cuid())
+  title     String
+  status    CaseStatus @default(ACTIVE)
+  summary   String?
+  ownerId   String
+  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Reserved for the audience side. Unused in v1.
+  isPublic   Boolean @default(false)
+  publicSlug String? @unique
+
+  victims        Victim[]
+  familyNotes    FamilyNote[]
+  people         Person[]
+  sources        Source[]
+  timelineEvents TimelineEvent[]
+  claims         Claim[]
+  episodes       Episode[]
+}
+
+// ---------- Victim ----------
+
+enum ProfileBasis {
+  FAMILY
+  PRIMARY_SOURCE
+  OTHER
+}
+
+model Victim {
+  id           String       @id @default(cuid())
+  caseId       String
+  case         Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  name         String
+  bornOn       DateTime?    @db.Date
+  diedOn       DateTime?    @db.Date
+  hometown     String?
+  profile      String
+  profileBasis ProfileBasis
+  photoUrl     String?
+  photoCredit  String?
+  isPrimary    Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+}
+
+// ---------- Family notes ----------
+
+enum FamilyNoteKind {
+  DO_NOT_INCLUDE
+  PREFERENCE
+  CONTEXT
+}
+
+model FamilyNote {
+  id         String         @id @default(cuid())
+  caseId     String
+  case       Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  kind       FamilyNoteKind
+  text       String
+  fromWhom   String?
+  receivedOn DateTime?      @db.Date
+  createdAt  DateTime       @default(now())
+  flags      Flag[]
+}
+
+// ---------- People ----------
+
+enum PersonRole {
+  SUSPECT
+  WITNESS
+  INVESTIGATOR
+  FAMILY
+  OTHER
+}
+
+enum LegalStatus {
+  UNCHARGED
+  CHARGED
+  CONVICTED
+  ACQUITTED
+  CLEARED
+}
+
+model Person {
+  id          String      @id @default(cuid())
+  caseId      String
+  case        Case        @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  name        String
+  role        PersonRole
+  legalStatus LegalStatus @default(UNCHARGED)
+  notes       String?
+  createdAt   DateTime    @default(now())
+  claims      Claim[]
+  flags       Flag[]
+}
+
+// ---------- Sources ----------
+
+enum SourceType {
+  URL
+  FILE
+  TEXT
+}
+
+enum SourceRating {
+  PRIMARY
+  RELIABLE
+  WEAK
+}
+
+enum SourceKind {
+  COURT_DOC
+  POLICE_RECORD
+  NEWS
+  INTERVIEW
+  FAMILY_STATEMENT
+  SOCIAL_MEDIA
+  OTHER
+}
+
+model Source {
+  id          String       @id @default(cuid())
+  caseId      String
+  case        Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  title       String
+  type        SourceType
+  url         String?
+  filePath    String?
+  fileName    String?
+  text        String?
+  rating      SourceRating
+  kind        SourceKind   @default(OTHER)
+  publishedOn DateTime?    @db.Date
+  notes       String?
+  createdAt   DateTime     @default(now())
+
+  events TimelineEventSource[]
+  claims ClaimSource[]
+}
+
+// ---------- Timeline ----------
+
+enum DatePrecision {
+  DAY
+  MONTH
+  YEAR
+  APPROXIMATE
+}
+
+model TimelineEvent {
+  id            String        @id @default(cuid())
+  caseId        String
+  case          Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  date          DateTime      @db.Date
+  datePrecision DatePrecision @default(DAY)
+  title         String
+  description   String?
+  createdAt     DateTime      @default(now())
+
+  sources TimelineEventSource[]
+  claims  Claim[]
+}
+
+model TimelineEventSource {
+  eventId  String
+  event    TimelineEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sourceId String
+  source   Source        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, sourceId])
+}
+
+// ---------- Claims ----------
+
+enum ClaimStatus {
+  CONFIRMED
+  ALLEGED
+  RUMOR
+}
+
+model Claim {
+  id        String         @id @default(cuid())
+  caseId    String
+  case      Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  text      String
+  status    ClaimStatus
+  eventId   String?
+  event     TimelineEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  episodeId String?
+  episode   Episode?       @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+
+  sources ClaimSource[]
+  people  Person[]
+  flags   Flag[]
+}
+
+model ClaimSource {
+  claimId  String
+  claim    Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  sourceId String
+  source   Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@id([claimId, sourceId])
+}
+
+// ---------- Episodes ----------
+
+enum EpisodeStatus {
+  DRAFT
+  CHECKED
+  READY
+}
+
+model Episode {
+  id             String        @id @default(cuid())
+  caseId         String
+  case           Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  title          String
+  script         String        @default("")
+  status         EpisodeStatus @default(DRAFT)
+  sourcingScore  Int?
+  unsourcedCount Int?
+  lastCheckedAt  DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  claims Claim[]
+  flags  Flag[]
+}
+
+// ---------- Flags ----------
+
+enum FlagKind {
+  WEAK_SOURCE_AS_FACT
+  UNCHARGED_NAMED_GUILTY
+  FAMILY_REQUEST
+  NO_SOURCE
+}
+
+enum FlagStatus {
+  OPEN
+  FIXED
+  DISMISSED
+}
+
+model Flag {
+  id               String      @id @default(cuid())
+  episodeId        String
+  episode          Episode     @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  kind             FlagKind
+  excerpt          String
+  reason           String
+  suggestedRewrite String?
+  status           FlagStatus  @default(OPEN)
+  dismissNote      String?
+  claimId          String?
+  claim            Claim?      @relation(fields: [claimId], references: [id], onDelete: SetNull)
+  personId         String?
+  person           Person?     @relation(fields: [personId], references: [id], onDelete: SetNull)
+  familyNoteId     String?
+  familyNote       FamilyNote? @relation(fields: [familyNoteId], references: [id], onDelete: SetNull)
+  createdAt        DateTime    @default(now())
+}
